@@ -1,0 +1,307 @@
+# Alerting Rules for Proxmox + VM Performance Monitoring
+groups:
+  - name: host_alerts
+    rules:
+      # High CPU steal indicates host overcommitment or noisy neighbor
+      - alert: HostCpuStealHigh
+        expr: |
+          avg by (instance) (rate(node_cpu_seconds_total{mode="steal"}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU steal on {{ $labels.instance }}"
+          description: "CPU steal is {{ $value | humanizePercentage }} on host {{ $labels.instance }}, indicating resource contention."
+
+      # Host CPU saturation
+      - alert: HostCpuSaturation
+        expr: |
+          node:cpu_utilization:avg5m > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU utilization on {{ $labels.instance }}"
+          description: "CPU utilization is {{ $value | humanizePercentage }} on host {{ $labels.instance }}."
+
+      # Host memory exhaustion
+      - alert: HostMemoryLow
+        expr: |
+          node:memory_utilization:ratio > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low memory on {{ $labels.instance }}"
+          description: "Memory utilization is {{ $value | humanizePercentage }} on host {{ $labels.instance }}."
+
+      # Host swap usage (any swap activity indicates memory pressure)
+      - alert: HostSwapActive
+        expr: |
+          (node_memory_SwapTotal_bytes - node_memory_SwapFree_bytes) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Swap in use on {{ $labels.instance }}"
+          description: "{{ $value | humanize1024 }}B of swap is in use on host {{ $labels.instance }}."
+
+      # High disk I/O latency on host
+      - alert: HostDiskLatencyHigh
+        expr: |
+          node:disk_read_latency:avg5m > 0.05
+          or
+          node:disk_write_latency:avg5m > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High disk latency on {{ $labels.instance }}"
+          description: "Disk latency is {{ $value | humanizeDuration }} on {{ $labels.device }}."
+
+      # Host disk saturation (weighted I/O time accounts for queue depth)
+      - alert: HostDiskSaturated
+        expr: |
+          node:disk_io_weighted:rate5m > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk saturation on {{ $labels.instance }}"
+          description: "Disk {{ $labels.device }} weighted I/O time is {{ $value | humanizePercentage }}, indicating queuing."
+
+      # Network packet drops on host
+      - alert: HostNetworkPacketDrops
+        expr: |
+          rate(node_network_receive_drop_total[5m]) > 0
+          or
+          rate(node_network_transmit_drop_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Network packet drops on {{ $labels.instance }}"
+          description: "Interface {{ $labels.device }} is dropping packets."
+
+      # Host disk space low
+      - alert: HostDiskSpaceLow
+        expr: |
+          (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes) < 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Low disk space on {{ $labels.instance }}"
+          description: "Filesystem {{ $labels.mountpoint }} has only {{ $value | humanizePercentage }} free."
+
+  - name: vm_alerts
+    rules:
+      # Guest CPU saturation
+      - alert: GuestCpuSaturation
+        expr: |
+          vm:cpu_utilization:avg5m > 90
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU on VM {{ $labels.vm_name }}"
+          description: "VM {{ $labels.vm_name }} ({{ $labels.vm_id }}) CPU is at {{ $value | printf \"%.1f\" }}%."
+
+      # Guest memory exhaustion
+      - alert: GuestMemoryLow
+        expr: |
+          vm:memory_utilization:ratio > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low memory on VM {{ $labels.vm_name }}"
+          description: "VM {{ $labels.vm_name }} memory utilization is {{ $value | humanizePercentage }}."
+
+      # Guest paging/swap activity
+      - alert: GuestPagingActive
+        expr: |
+          rate(windows_os_paging_limit_bytes[5m]) > 0
+          and
+          windows_os_paging_free_bytes / windows_os_paging_limit_bytes < 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Paging file pressure on VM {{ $labels.vm_name }}"
+          description: "VM {{ $labels.vm_name }} paging file is {{ $value | humanizePercentage }} utilized."
+
+      # Guest disk latency high (logical disk - includes filesystem cache effects)
+      - alert: GuestDiskLatencyHigh
+        expr: |
+          vm:disk_read_latency:avg5m > 0.05
+          or
+          vm:disk_write_latency:avg5m > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High disk latency on VM {{ $labels.vm_name }}"
+          description: "Disk latency is {{ $value | humanizeDuration }} on VM {{ $labels.vm_name }}."
+
+      # Guest physical disk latency high (bypasses cache - more accurate for storage issues)
+      - alert: GuestPhysicalDiskLatencyHigh
+        expr: |
+          vm:physical_disk_read_latency:avg5m > 0.02
+          or
+          vm:physical_disk_write_latency:avg5m > 0.02
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High physical disk latency on VM {{ $labels.vm_name }}"
+          description: "Physical disk latency is {{ $value | humanizeDuration }} on VM {{ $labels.vm_name }}. This bypasses filesystem cache."
+
+      # Guest disk queue saturated (indicates disk can't keep up with I/O requests)
+      - alert: GuestDiskQueueSaturated
+        expr: |
+          vm:disk_queue_depth:avg5m > 4
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk queue saturated on VM {{ $labels.vm_name }}"
+          description: "VM {{ $labels.vm_name }} has {{ $value | printf \"%.1f\" }} requests queued. Values > 2-4 indicate disk saturation."
+
+      # Guest disk fully busy (no idle time)
+      - alert: GuestDiskBusy
+        expr: |
+          vm:disk_busy:ratio > 0.95
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk constantly busy on VM {{ $labels.vm_name }}"
+          description: "VM {{ $labels.vm_name }} disk is {{ $value | humanizePercentage }} busy with no idle time."
+
+      # Guest network packet drops
+      - alert: GuestNetworkPacketDrops
+        expr: |
+          rate(windows_net_packets_received_discarded_total[5m]) > 0
+          or
+          rate(windows_net_packets_outbound_discarded_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Network packet drops on VM {{ $labels.vm_name }}"
+          description: "VM {{ $labels.vm_name }} is dropping network packets."
+
+      # VM down (from PVE exporter perspective)
+      - alert: VmDown
+        expr: |
+          pve_up{id=~"qemu/.*"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "VM {{ $labels.name }} is down"
+          description: "VM {{ $labels.name }} on node {{ $labels.node }} is not running."
+
+      # Guest GPU utilization very high
+      - alert: GuestGpuUtilizationHigh
+        expr: |
+          vm:gpu_utilization:avg5m > 95
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High GPU utilization on VM {{ $labels.vm_name }}"
+          description: "VM {{ $labels.vm_name }} GPU utilization is {{ $value | printf \"%.1f\" }}%."
+
+      # Guest GPU memory exhaustion (dedicated VRAM)
+      - alert: GuestGpuMemoryLow
+        expr: |
+          (vm:gpu_memory_dedicated:bytes / on(vm_id) group_left windows_gpu_memory_limit_bytes) > 0.95
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low GPU memory on VM {{ $labels.vm_name }}"
+          description: "VM {{ $labels.vm_name }} GPU dedicated memory is {{ $value | humanizePercentage }} utilized."
+
+      # Guest GPU memory spillover to system RAM (indicates VRAM exhaustion)
+      - alert: GuestGpuMemorySpillover
+        expr: |
+          vm:gpu_memory_shared:bytes > 1073741824
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GPU memory spillover on VM {{ $labels.vm_name }}"
+          description: "VM {{ $labels.vm_name }} is using {{ $value | humanize1024 }}B of shared GPU memory (system RAM). Consider a vGPU profile with more VRAM."
+
+  - name: gpu_alerts
+    rules:
+      # GPU utilization very high
+      - alert: GpuUtilizationHigh
+        expr: |
+          gpu:utilization:avg5m > 95
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High GPU utilization on {{ $labels.gpu }}"
+          description: "GPU {{ $labels.gpu }} utilization is {{ $value | printf \"%.1f\" }}%."
+
+      # GPU memory exhaustion
+      - alert: GpuMemoryLow
+        expr: |
+          gpu:memory_utilization:ratio > 0.95
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low GPU memory on {{ $labels.gpu }}"
+          description: "GPU {{ $labels.gpu }} memory is {{ $value | humanizePercentage }} utilized."
+
+      # GPU temperature high
+      - alert: GpuTemperatureHigh
+        expr: |
+          gpu:temperature:current > 85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High GPU temperature on {{ $labels.gpu }}"
+          description: "GPU {{ $labels.gpu }} temperature is {{ $value }}°C."
+
+  - name: infrastructure_alerts
+    rules:
+      # Discovery service down
+      - alert: DiscoveryServiceDown
+        expr: |
+          up{job="discovery-service"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Discovery service is down"
+          description: "VM discovery service is not responding. New VMs won't be discovered."
+
+      # PVE exporter down
+      - alert: PveExporterDown
+        expr: |
+          up{job="pve-exporter"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PVE exporter is down"
+          description: "Proxmox metrics exporter is not responding."
+
+      # Prometheus storage filling up
+      - alert: PrometheusStorageFilling
+        expr: |
+          predict_linear(prometheus_tsdb_storage_blocks_bytes[6h], 24*60*60) > prometheus_tsdb_retention_limit_bytes
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Prometheus storage filling up"
+          description: "Prometheus storage is predicted to exceed retention limit within 24 hours."

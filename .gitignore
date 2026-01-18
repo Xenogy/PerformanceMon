@@ -1,0 +1,38 @@
+# Environment files
+.env
+*.env.local
+
+# Secrets
+pve-exporter/pve.yml
+
+# Data directories (if running outside Docker)
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp

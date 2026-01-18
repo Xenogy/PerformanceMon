@@ -1,0 +1,17 @@
+# Grafana Dashboard Provisioning
+# https://grafana.com/docs/grafana/latest/administration/provisioning/#dashboards
+
+apiVersion: 1
+
+providers:
+  - name: 'Proxmox Performance Monitor'
+    orgId: 1
+    folder: 'Proxmox Monitoring'
+    folderUid: 'proxmox-monitoring'
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards/json

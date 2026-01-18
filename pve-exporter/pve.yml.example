@@ -1,0 +1,15 @@
+# Proxmox VE Exporter Configuration
+# Copy this file to pve.yml and fill in your credentials
+#
+# To create an API token in Proxmox:
+# 1. Go to Datacenter -> Permissions -> API Tokens
+# 2. Create a new token for user 'prometheus@pve' (or create this user first)
+# 3. Uncheck "Privilege Separation" to inherit user permissions
+# 4. Assign PVEAuditor role to the user at datacenter level
+
+default:
+  user: prometheus@pve
+  token_name: monitoring
+  token_value: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+  # Set to true if using valid SSL certificates
+  verify_ssl: false

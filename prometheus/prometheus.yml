@@ -1,0 +1,100 @@
+# Prometheus Configuration for Proxmox + VM Performance Monitoring
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: 'proxmox-performance-monitor'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+# Load rules
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+scrape_configs:
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Alertmanager monitoring
+  - job_name: 'alertmanager'
+    static_configs:
+      - targets: ['alertmanager:9093']
+
+  # Proxmox VE Exporter - cluster-level metrics
+  # Provides VM metadata, status, and resource allocation
+  - job_name: 'pve-exporter'
+    static_configs:
+      - targets:
+          - 10.0.0.30  # Proxmox host to query
+    metrics_path: /pve
+    params:
+      module: [default]
+      cluster: ['1']
+      node: ['1']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: pve-exporter:9221
+    # Filter to only gpu1 node metrics
+    metric_relabel_configs:
+      # Keep cluster/storage/pool metrics and gpu1 node/VM metrics
+      # gpu1 VMs: 6001-6002, 7001-7011, 9991-9999
+      - source_labels: [id]
+        regex: '^(cluster/.*|node/gpu1|storage/.*|/pool/.*|qemu/(600[12]|70(0[1-9]|1[01])|999[1245689]))$'
+        action: keep
+
+  # Node Exporter - Proxmox host system metrics (real memory, CPU, disk I/O)
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets:
+          - node-exporter:9100
+        labels:
+          node: 'gpu1'
+
+  # NVIDIA GPU Exporter - host-side GPU metrics (vGPU)
+  - job_name: 'nvidia-gpu'
+    static_configs:
+      - targets:
+          - nvidia-gpu-exporter:9835
+        labels:
+          host: 'proxmox-gpu-host'
+
+  # Windows VM Exporter - discovered via HTTP SD
+  # Targets are dynamically provided by the discovery service
+  - job_name: 'windows-vms'
+    http_sd_configs:
+      - url: http://discovery-service:8000/targets
+        refresh_interval: 15s
+    relabel_configs:
+      # Preserve VM metadata as labels for correlation queries
+      - source_labels: [__meta_vm_id]
+        target_label: vm_id
+      - source_labels: [__meta_vm_name]
+        target_label: vm_name
+      - source_labels: [__meta_node]
+        target_label: node
+      - source_labels: [__meta_vcpus]
+        target_label: vcpus
+      - source_labels: [__meta_memory_gb]
+        target_label: memory_gb
+      - source_labels: [__meta_tags]
+        target_label: tags
+      - source_labels: [__meta_disk_type]
+        target_label: disk_type
+
+  # Discovery service health monitoring
+  - job_name: 'discovery-service'
+    static_configs:
+      - targets:
+          - discovery-service:8000
+    metrics_path: /metrics

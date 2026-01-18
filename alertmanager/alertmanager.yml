@@ -1,0 +1,96 @@
+# Alertmanager Configuration
+# https://prometheus.io/docs/alerting/latest/configuration/
+
+global:
+  # Resolve timeout
+  resolve_timeout: 5m
+
+# Notification templates
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+# The root route - all alerts enter here
+route:
+  # Group alerts by these labels
+  group_by: ['alertname', 'severity', 'node']
+  
+  # Wait before sending initial notification for a group
+  group_wait: 30s
+  
+  # Wait before sending updates for a group
+  group_interval: 5m
+  
+  # Wait before resending a notification
+  repeat_interval: 4h
+  
+  # Default receiver
+  receiver: 'default-receiver'
+  
+  # Child routes for specific alert types
+  routes:
+    # Critical alerts - send immediately
+    - match:
+        severity: critical
+      receiver: 'critical-alerts'
+      group_wait: 10s
+      repeat_interval: 1h
+    
+    # VM-specific alerts - group by VM
+    - match:
+        job: windows-vms
+      receiver: 'vm-alerts'
+      group_by: ['alertname', 'vm_name', 'vm_id']
+
+# Inhibition rules - suppress certain alerts when others are firing
+inhibit_rules:
+  # If a host is down, suppress all VM alerts for VMs on that host
+  - source_match:
+      alertname: 'HostDown'
+    target_match_re:
+      alertname: '^(Guest|Vm).*'
+    equal: ['node']
+  
+  # Critical alerts suppress warning alerts for same issue
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'instance']
+
+# Receivers define notification destinations
+receivers:
+  # Default receiver - sends to Discord
+  - name: 'default-receiver'
+    discord_configs:
+      - webhook_url: 'https://discord.com/api/webhooks/1456506106946916363/s650Dh3MC-YDFaI6zMHdiv38DCgZr5n2UDFw8JfVgwRP3m0mTEYdaF5ALmbAS9ALVmiX'
+        title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'
+        message: |
+          {{ range .Alerts }}
+          **{{ .Labels.alertname }}** {{ if .Labels.vm_name }}({{ .Labels.vm_name }}){{ end }}
+          {{ .Annotations.description }}
+          {{ end }}
+  
+  # Critical alerts receiver
+  - name: 'critical-alerts'
+    discord_configs:
+      - webhook_url: 'https://discord.com/api/webhooks/1456506106946916363/s650Dh3MC-YDFaI6zMHdiv38DCgZr5n2UDFw8JfVgwRP3m0mTEYdaF5ALmbAS9ALVmiX'
+        title: '🚨 CRITICAL: {{ .CommonLabels.alertname }}'
+        message: |
+          {{ range .Alerts }}
+          **{{ .Labels.alertname }}** {{ if .Labels.vm_name }}({{ .Labels.vm_name }}){{ end }}
+          {{ .Annotations.description }}
+          {{ end }}
+
+  # VM-specific alerts
+  - name: 'vm-alerts'
+    discord_configs:
+      - webhook_url: 'https://discord.com/api/webhooks/1456506106946916363/s650Dh3MC-YDFaI6zMHdiv38DCgZr5n2UDFw8JfVgwRP3m0mTEYdaF5ALmbAS9ALVmiX'
+        title: '⚠️ VM Alert: {{ .CommonLabels.alertname }}'
+        message: |
+          {{ range .Alerts }}
+          **{{ .Labels.vm_name }}** ({{ .Labels.vm_id }})
+          {{ .Annotations.description }}
+          {{ end }}
+
+  # Null receiver for silencing
+  - name: 'null'

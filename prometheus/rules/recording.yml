@@ -1,0 +1,444 @@
+# Recording Rules for Pre-aggregated Metrics
+# These improve dashboard query performance by pre-computing common aggregations
+
+groups:
+  - name: host_aggregations
+    interval: 1m
+    rules:
+      # Host CPU utilization from pve-exporter (already a ratio)
+      - record: node:cpu_utilization:avg5m
+        expr: |
+          avg_over_time(pve_cpu_usage_ratio{id=~"node/.*"}[5m])
+
+      # Host memory utilization from pve-exporter
+      - record: node:memory_utilization:ratio
+        expr: |
+          pve_memory_usage_bytes{id=~"node/.*"} / pve_memory_size_bytes{id=~"node/.*"}
+
+      # Host disk read throughput - using VM disk metrics aggregated
+      # Note: pve-exporter doesn't provide host disk I/O rates
+      - record: node:disk_read_bytes:rate5m
+        expr: |
+          sum by (id) (
+            rate(pve_disk_read_bytes{id=~"node/.*"}[5m])
+          ) or vector(0)
+
+      # Host disk write throughput
+      - record: node:disk_write_bytes:rate5m
+        expr: |
+          sum by (id) (
+            rate(pve_disk_write_bytes{id=~"node/.*"}[5m])
+          ) or vector(0)
+
+      # Host network receive throughput from node VMs
+      - record: node:network_receive_bytes:rate5m
+        expr: |
+          sum by (id) (
+            rate(pve_network_receive_bytes{id=~"node/.*"}[5m])
+          ) or vector(0)
+
+      # Host network transmit throughput
+      - record: node:network_transmit_bytes:rate5m
+        expr: |
+          sum by (id) (
+            rate(pve_network_transmit_bytes{id=~"node/.*"}[5m])
+          ) or vector(0)
+
+      # Host disk weighted I/O time (accounts for queue depth - better saturation indicator)
+      - record: node:disk_io_weighted:rate5m
+        expr: |
+          rate(node_disk_io_time_weighted_seconds_total[5m])
+
+      # Host disk read latency
+      - record: node:disk_read_latency:avg5m
+        expr: |
+          rate(node_disk_read_time_seconds_total[5m]) / rate(node_disk_reads_completed_total[5m])
+
+      # Host disk write latency
+      - record: node:disk_write_latency:avg5m
+        expr: |
+          rate(node_disk_write_time_seconds_total[5m]) / rate(node_disk_writes_completed_total[5m])
+
+  - name: vm_aggregations
+    interval: 1m
+    rules:
+      # VM CPU utilization percentage (from windows_exporter)
+      - record: vm:cpu_utilization:avg5m
+        expr: |
+          100 - (avg by (vm_id, vm_name, node, instance) (
+            rate(windows_cpu_time_total{mode="idle"}[5m])
+          )) * 100
+
+      # VM memory utilization percentage (supports both old and new windows_exporter)
+      - record: vm:memory_utilization:ratio
+        expr: |
+          1 - (
+            max by (vm_id, vm_name, node, instance) (
+              windows_memory_physical_free_bytes or windows_os_physical_memory_free_bytes
+            ) / 
+            max by (vm_id, vm_name, node, instance) (
+              windows_memory_physical_total_bytes or windows_os_visible_memory_bytes
+            )
+          )
+
+      # VM memory used in GB
+      - record: vm:memory_used_gb:current
+        expr: |
+          (
+            max by (vm_id, vm_name, node, instance) (windows_memory_physical_total_bytes or windows_os_visible_memory_bytes)
+            - max by (vm_id, vm_name, node, instance) (windows_memory_physical_free_bytes or windows_os_physical_memory_free_bytes)
+          ) / 1073741824
+
+      # VM total memory in GB
+      - record: vm:memory_total_gb:current
+        expr: |
+          max by (vm_id, vm_name, node, instance) (
+            windows_memory_physical_total_bytes or windows_os_visible_memory_bytes
+          ) / 1073741824
+
+      # VM disk read throughput
+      - record: vm:disk_read_bytes:rate5m
+        expr: |
+          sum by (vm_id, vm_name, node, instance) (
+            rate(windows_logical_disk_read_bytes_total{volume!~"HarddiskVolume.*"}[5m])
+          )
+
+      # VM disk write throughput
+      - record: vm:disk_write_bytes:rate5m
+        expr: |
+          sum by (vm_id, vm_name, node, instance) (
+            rate(windows_logical_disk_write_bytes_total{volume!~"HarddiskVolume.*"}[5m])
+          )
+
+      # VM disk read latency (seconds) - averaged across volumes
+      - record: vm:disk_read_latency:avg5m
+        expr: |
+          avg by (vm_id, vm_name, node, instance) (
+            rate(windows_logical_disk_read_seconds_total{volume!~"HarddiskVolume.*"}[5m]) /
+            rate(windows_logical_disk_reads_total{volume!~"HarddiskVolume.*"}[5m])
+          )
+
+      # VM disk write latency (seconds) - averaged across volumes
+      - record: vm:disk_write_latency:avg5m
+        expr: |
+          avg by (vm_id, vm_name, node, instance) (
+            rate(windows_logical_disk_write_seconds_total{volume!~"HarddiskVolume.*"}[5m]) /
+            rate(windows_logical_disk_writes_total{volume!~"HarddiskVolume.*"}[5m])
+          )
+
+      # VM physical disk read latency (bypasses filesystem cache - more accurate)
+      - record: vm:physical_disk_read_latency:avg5m
+        expr: |
+          avg by (vm_id, vm_name, node, instance) (
+            rate(windows_physical_disk_read_latency_seconds_total[5m]) /
+            rate(windows_physical_disk_reads_total[5m])
+          )
+
+      # VM physical disk write latency
+      - record: vm:physical_disk_write_latency:avg5m
+        expr: |
+          avg by (vm_id, vm_name, node, instance) (
+            rate(windows_physical_disk_write_latency_seconds_total[5m]) /
+            rate(windows_physical_disk_writes_total[5m])
+          )
+
+      # VM disk queue depth (saturation indicator - high values mean disk can't keep up)
+      - record: vm:disk_queue_depth:avg5m
+        expr: |
+          avg by (vm_id, vm_name, node, instance) (
+            avg_over_time(windows_logical_disk_requests_queued{volume!~"HarddiskVolume.*"}[5m])
+          )
+
+      # VM disk busy ratio (1 = 100% busy, no idle time)
+      - record: vm:disk_busy:ratio
+        expr: |
+          1 - avg by (vm_id, vm_name, node, instance) (
+            rate(windows_logical_disk_idle_seconds_total{volume!~"HarddiskVolume.*"}[5m])
+          )
+
+      # VM network receive throughput
+      - record: vm:network_receive_bytes:rate5m
+        expr: |
+          sum by (vm_id, vm_name, node, instance) (
+            rate(windows_net_bytes_received_total[5m])
+          )
+
+      # VM network transmit throughput
+      - record: vm:network_transmit_bytes:rate5m
+        expr: |
+          sum by (vm_id, vm_name, node, instance) (
+            rate(windows_net_bytes_sent_total[5m])
+          )
+
+      # VM GPU utilization (from Windows GPU performance counters)
+      # Uses GPU engine running time to calculate utilization
+      - record: vm:gpu_utilization:avg5m
+        expr: |
+          max by (vm_id, vm_name, node, instance) (
+            sum by (vm_id, vm_name, node, instance, disk_type) (
+              rate(windows_gpu_engine_time_seconds{engtype="3D"}[5m])
+            )
+          ) * 100
+
+      # VM GPU dedicated memory usage (VRAM)
+      - record: vm:gpu_memory_dedicated:bytes
+        expr: |
+          max by (vm_id, vm_name, node, instance) (
+            windows_gpu_adapter_memory_dedicated_bytes
+          )
+
+      # VM GPU shared memory usage
+      - record: vm:gpu_memory_shared:bytes
+        expr: |
+          max by (vm_id, vm_name, node, instance) (
+            windows_gpu_adapter_memory_shared_bytes
+          )
+
+      # VM GPU 3D engine running time rate
+      - record: vm:gpu_3d_engine:rate5m
+        expr: |
+          max by (vm_id, vm_name, node, instance) (
+            sum by (vm_id, vm_name, node, instance, disk_type) (
+              rate(windows_gpu_engine_time_seconds{engtype="3D"}[5m])
+            )
+          )
+
+      # VM GPU compute engine running time rate
+      - record: vm:gpu_compute_engine:rate5m
+        expr: |
+          max by (vm_id, vm_name, node, instance) (
+            sum by (vm_id, vm_name, node, instance, disk_type) (
+              rate(windows_gpu_engine_time_seconds{engtype="Compute"}[5m])
+            )
+          )
+
+      # VM GPU video encode engine running time rate
+      - record: vm:gpu_video_encode:rate5m
+        expr: |
+          max by (vm_id, vm_name, node, instance) (
+            sum by (vm_id, vm_name, node, instance, disk_type) (
+              rate(windows_gpu_engine_time_seconds{engtype="VideoEncode"}[5m])
+            )
+          )
+
+      # VM GPU video decode engine running time rate
+      - record: vm:gpu_video_decode:rate5m
+        expr: |
+          max by (vm_id, vm_name, node, instance) (
+            sum by (vm_id, vm_name, node, instance, disk_type) (
+              rate(windows_gpu_engine_time_seconds{engtype="VideoDecode"}[5m])
+            )
+          )
+
+  - name: gpu_aggregations
+    interval: 1m
+    rules:
+      # GPU utilization averaged
+      - record: gpu:utilization:avg5m
+        expr: |
+          avg by (gpu, uuid) (
+            avg_over_time(nvidia_gpu_duty_cycle[5m])
+          )
+
+      # GPU memory utilization
+      - record: gpu:memory_utilization:ratio
+        expr: |
+          nvidia_gpu_memory_used_bytes / nvidia_gpu_memory_total_bytes
+
+      # GPU temperature
+      - record: gpu:temperature:current
+        expr: |
+          nvidia_gpu_temperature_celsius
+
+  - name: pve_aggregations
+    interval: 1m
+    rules:
+      # PVE VM CPU usage from hypervisor perspective
+      - record: pve:vm_cpu:avg5m
+        expr: |
+          avg_over_time(pve_cpu_usage_ratio[5m])
+
+      # PVE VM memory usage from hypervisor perspective
+      - record: pve:vm_memory:ratio
+        expr: |
+          pve_memory_usage_bytes / pve_memory_size_bytes
+
+      # Count of running VMs per node
+      - record: pve:running_vms:count
+        expr: |
+          count by (node) (pve_up{id=~"qemu/.*"} == 1)
+  - name: host_advanced_metrics
+    interval: 30s
+    rules:
+      # === Pressure Stall Information (PSI) - CPU/Memory/IO contention ===
+      
+      # CPU pressure - percentage of time tasks are stalled waiting for CPU
+      - record: host:cpu_pressure:some_ratio
+        expr: |
+          rate(node_pressure_cpu_waiting_seconds_total[5m])
+
+      # Memory pressure - percentage of time tasks are stalled due to memory
+      - record: host:memory_pressure:some_ratio
+        expr: |
+          rate(node_pressure_memory_waiting_seconds_total[5m])
+
+      - record: host:memory_pressure:full_ratio
+        expr: |
+          rate(node_pressure_memory_stalled_seconds_total[5m])
+
+      # IO pressure - percentage of time tasks are stalled on I/O
+      - record: host:io_pressure:some_ratio
+        expr: |
+          rate(node_pressure_io_waiting_seconds_total[5m])
+
+      - record: host:io_pressure:full_ratio
+        expr: |
+          rate(node_pressure_io_stalled_seconds_total[5m])
+
+      # === Scheduler Statistics - CPU wait time ===
+      
+      # Average time tasks spend waiting on runqueue (indicates CPU saturation)
+      - record: host:scheduler_wait:seconds_rate
+        expr: |
+          sum(rate(node_schedstat_waiting_seconds_total[5m]))
+
+      # Total time CPUs spent running tasks
+      - record: host:scheduler_run:seconds_rate
+        expr: |
+          sum(rate(node_schedstat_running_seconds_total[5m]))
+
+      # Scheduler wait ratio (higher = more CPU contention)
+      - record: host:scheduler_wait:ratio
+        expr: |
+          sum(rate(node_schedstat_waiting_seconds_total[5m])) / 
+          (sum(rate(node_schedstat_running_seconds_total[5m])) + sum(rate(node_schedstat_waiting_seconds_total[5m])))
+
+      # === Context Switches and Interrupts ===
+      
+      # Context switches per second (high values may indicate overhead)
+      - record: host:context_switches:rate5m
+        expr: |
+          rate(node_context_switches_total[5m])
+
+      # Interrupts per second
+      - record: host:interrupts:rate5m
+        expr: |
+          sum(rate(node_interrupts_total[5m]))
+
+      # TLB shootdowns per second (indicates memory mapping overhead)
+      - record: host:tlb_shootdowns:rate5m
+        expr: |
+          sum(rate(node_interrupts_total{type="TLB"}[5m]))
+
+      # === Memory Detailed Metrics ===
+      
+      # Page faults per second (minor - not requiring disk access)
+      - record: host:page_faults:rate5m
+        expr: |
+          rate(node_vmstat_pgfault[5m])
+
+      # Major page faults per second (requiring disk access - indicates memory pressure)
+      - record: host:major_page_faults:rate5m
+        expr: |
+          rate(node_vmstat_pgmajfault[5m])
+
+      # Swap in/out rate
+      - record: host:swap_in:rate5m
+        expr: |
+          rate(node_vmstat_pswpin[5m])
+
+      - record: host:swap_out:rate5m
+        expr: |
+          rate(node_vmstat_pswpout[5m])
+
+      # OOM kill count (useful for alerts)
+      - record: host:oom_kills:total
+        expr: |
+          node_vmstat_oom_kill
+
+      # Dirty pages - data waiting to be written to disk
+      - record: host:memory_dirty:bytes
+        expr: |
+          node_memory_Dirty_bytes
+
+      # Writeback - data actively being written to disk
+      - record: host:memory_writeback:bytes
+        expr: |
+          node_memory_Writeback_bytes
+
+      # Memory mapped files
+      - record: host:memory_mapped:bytes
+        expr: |
+          node_memory_Mapped_bytes
+
+      # Kernel slab memory (reclaimable vs unreclaimable)
+      - record: host:slab_reclaimable:bytes
+        expr: |
+          node_memory_SReclaimable_bytes
+
+      - record: host:slab_unreclaimable:bytes
+        expr: |
+          node_memory_SUnreclaim_bytes
+
+      # === NUMA Metrics ===
+      
+      # NUMA node memory free
+      - record: host:numa_memory_free:bytes
+        expr: |
+          node_memory_numa_MemFree
+
+      # NUMA node memory total
+      - record: host:numa_memory_total:bytes
+        expr: |
+          node_memory_numa_MemTotal
+
+      # NUMA local vs remote access ratio (lower remote is better)
+      - record: host:numa_local_access:total
+        expr: |
+          node_memory_numa_local_node
+
+      - record: host:numa_remote_access:total
+        expr: |
+          node_memory_numa_other_node
+
+      # === Network Stack Metrics ===
+      
+      # Softnet drops per CPU (indicates network overload)
+      - record: host:softnet_dropped:rate5m
+        expr: |
+          sum by (cpu) (rate(node_softnet_dropped_total[5m]))
+
+      # Softnet time squeeze (CPU couldn't process all packets in time)
+      - record: host:softnet_squeeze:rate5m
+        expr: |
+          sum by (cpu) (rate(node_softnet_times_squeezed_total[5m]))
+
+      # TCP connection states
+      - record: host:tcp_connections:established
+        expr: |
+          node_tcp_connection_states{state="established"}
+
+      - record: host:tcp_connections:time_wait
+        expr: |
+          node_tcp_connection_states{state="time_wait"}
+
+      # === Process Metrics ===
+      
+      # Process counts by state
+      - record: host:processes_running:count
+        expr: |
+          node_processes_state{state="R"}
+
+      - record: host:processes_blocked:count
+        expr: |
+          node_processes_state{state="D"}
+
+      # Fork rate
+      - record: host:forks:rate5m
+        expr: |
+          rate(node_forks_total[5m])
+
+      # Threads total
+      - record: host:threads:total
+        expr: |
+          node_processes_threads

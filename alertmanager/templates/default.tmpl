@@ -1,0 +1,94 @@
+{{ define "slack.title" -}}
+[{{ .Status | toUpper }}{{ if eq .Status "firing" }}:{{ .Alerts.Firing | len }}{{ end }}] {{ .GroupLabels.alertname }}
+{{- end }}
+
+{{ define "slack.text" -}}
+{{ range .Alerts }}
+*Alert:* {{ .Labels.alertname }}
+*Severity:* {{ .Labels.severity }}
+*Instance:* {{ .Labels.instance }}
+{{ if .Labels.vm_name }}*VM:* {{ .Labels.vm_name }} ({{ .Labels.vm_id }}){{ end }}
+{{ if .Labels.node }}*Node:* {{ .Labels.node }}{{ end }}
+*Description:* {{ .Annotations.description }}
+*Started:* {{ .StartsAt.Format "2006-01-02 15:04:05 MST" }}
+{{ if .EndsAt }}*Ended:* {{ .EndsAt.Format "2006-01-02 15:04:05 MST" }}{{ end }}
+---
+{{ end }}
+{{- end }}
+
+{{ define "email.subject" -}}
+[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }} {{ if .GroupLabels.node }}on {{ .GroupLabels.node }}{{ end }}
+{{- end }}
+
+{{ define "email.html" -}}
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    .header { padding: 10px; margin-bottom: 20px; border-radius: 4px; }
+    .firing { background-color: #d32f2f; color: white; }
+    .resolved { background-color: #388e3c; color: white; }
+    .alert { border: 1px solid #ddd; padding: 15px; margin-bottom: 10px; border-radius: 4px; }
+    .label { font-weight: bold; color: #333; }
+    .value { color: #666; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { text-align: left; padding: 8px; border-bottom: 1px solid #ddd; }
+    th { background-color: #f5f5f5; }
+  </style>
+</head>
+<body>
+  <div class="header {{ if eq .Status "firing" }}firing{{ else }}resolved{{ end }}">
+    <h2>{{ .Status | toUpper }}: {{ .GroupLabels.alertname }}</h2>
+  </div>
+  
+  <table>
+    <tr>
+      <th>Status</th>
+      <th>Alert</th>
+      <th>Instance</th>
+      <th>Severity</th>
+      <th>Description</th>
+      <th>Started</th>
+    </tr>
+    {{ range .Alerts }}
+    <tr>
+      <td>{{ .Status }}</td>
+      <td>{{ .Labels.alertname }}</td>
+      <td>{{ .Labels.instance }}{{ if .Labels.vm_name }} ({{ .Labels.vm_name }}){{ end }}</td>
+      <td>{{ .Labels.severity }}</td>
+      <td>{{ .Annotations.description }}</td>
+      <td>{{ .StartsAt.Format "2006-01-02 15:04:05" }}</td>
+    </tr>
+    {{ end }}
+  </table>
+  
+  <p style="margin-top: 20px; color: #999; font-size: 12px;">
+    Sent by Alertmanager • <a href="{{ .ExternalURL }}">View in Alertmanager</a>
+  </p>
+</body>
+</html>
+{{- end }}
+
+{{ define "webhook.default" -}}
+{
+  "status": "{{ .Status }}",
+  "groupLabels": {{ .GroupLabels | toJson }},
+  "commonLabels": {{ .CommonLabels | toJson }},
+  "commonAnnotations": {{ .CommonAnnotations | toJson }},
+  "externalURL": "{{ .ExternalURL }}",
+  "alerts": [
+    {{ range $i, $alert := .Alerts }}
+    {{ if $i }},{{ end }}
+    {
+      "status": "{{ $alert.Status }}",
+      "labels": {{ $alert.Labels | toJson }},
+      "annotations": {{ $alert.Annotations | toJson }},
+      "startsAt": "{{ $alert.StartsAt.Format "2006-01-02T15:04:05Z07:00" }}",
+      "endsAt": "{{ $alert.EndsAt.Format "2006-01-02T15:04:05Z07:00" }}",
+      "fingerprint": "{{ $alert.Fingerprint }}"
+    }
+    {{ end }}
+  ]
+}
+{{- end }}
